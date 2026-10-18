@@ -30,18 +30,24 @@
     stone:   { name: 'Stone',      icon: '🧱' },
     berries: { name: 'Berries',    icon: '🍒', food: { hunger: 15, thirst: 4 } },
     pie:     { name: 'Berry Pie',  icon: '🥧', food: { hunger: 60, thirst: 0 } },
+    fiber:   { name: 'Plant Fiber', icon: '🌾' },
+    fish:    { name: 'Raw Fish',   icon: '🐟', food: { hunger: 10, thirst: 2 } },
+    cooked_fish: { name: 'Cooked Fish', icon: '🍤', food: { hunger: 40, thirst: 0 } },
   };
-  const ITEM_ORDER = ['wood', 'stick', 'pebble', 'stone', 'berries', 'pie'];
+  const ITEM_ORDER = ['wood', 'stick', 'pebble', 'stone', 'fiber', 'berries', 'fish', 'cooked_fish', 'pie'];
 
   const TOOLS = {
     axe:     { name: 'Stone Axe',     icon: '🪓' },
     pickaxe: { name: 'Stone Pickaxe', icon: '⛏️' },
+    rod:     { name: 'Fishing Rod',   icon: '🎣' },
   };
 
   const RECIPES = [
     { id: 'axe',     name: 'Stone Axe',     icon: '🪓', cost: { stick: 3, pebble: 2 }, desc: 'Chop trees for wood.', tool: 'axe' },
     { id: 'pickaxe', name: 'Stone Pickaxe', icon: '⛏️', cost: { stick: 3, pebble: 3 }, desc: 'Mine rocks for stone.', tool: 'pickaxe' },
     { id: 'pie',     name: 'Berry Pie',     icon: '🥧', cost: { berries: 3 }, desc: '+60 hunger. Needs a lit campfire nearby.', item: 'pie', fire: true },
+    { id: 'rod',     name: 'Fishing Rod',   icon: '🎣', cost: { stick: 3, fiber: 2 }, desc: 'Press R to fish. Fiber comes from berry bushes.', tool: 'rod' },
+    { id: 'cookedfish', name: 'Cooked Fish', icon: '🍤', cost: { fish: 1 }, desc: '+40 hunger. Needs a lit campfire nearby.', item: 'cooked_fish', fire: true },
   ];
 
   const BUILDS = [
@@ -229,7 +235,7 @@
         cooldown: 0, swing: 0, lastTool: null,
       },
       inv: {},
-      tools: { axe: 0, pickaxe: 0 },
+      tools: { axe: 0, pickaxe: 0, rod: 0 },
       time: DAY_LENGTH * 0.26,
       build: null,
       floats: [],
@@ -238,7 +244,10 @@
       sleeping: false,
       dead: false,
       lastDay: 1,
+      fishMode: false, fishing: null,
+      fishes: [], particles: [], ripples: [],
     };
+    spawnFishNear(FISH_TARGET);
     msgThrottle.clear();
     logEl.innerHTML = '';
     invDirty = true;
@@ -368,8 +377,7 @@
   }
 
   function eatBest() {
-    if (count('pie') > 0) return eat('pie');
-    if (count('berries') > 0) return eat('berries');
+    for (const food of ['pie', 'cooked_fish', 'berries', 'fish']) if (count(food) > 0) return eat(food);
     msgOnce('nofood', 'You have nothing to eat. Look for berry bushes.', 2);
     return false;
   }
@@ -411,7 +419,7 @@
   // ---------------------------------------------------------------------------
   // Actions
   // ---------------------------------------------------------------------------
-  const mouse = { x: 0, y: 0, down: false, shift: false };
+  const mouse = { x: 0, y: 0, down: false, pressed: false, shift: false };
   let camX = 0, camY = 0;
 
   function hoverTile() {
@@ -452,6 +460,7 @@
       case 'bush':
         if (o.berries) {
           give('berries', 2 + Math.floor(Math.random() * 2), cx, cy);
+          if (Math.random() < 0.6) give('fiber', 1, cx, cy - 14);
           o.berries = false;
           o.regrow = 60;
         } else {
@@ -558,8 +567,397 @@
     if (!isNight()) { msgOnce('sleepday', "It's daytime. You can only sleep at night.", 2); return; }
     if (!computeSheltered()) { msgOnce('sleepout', "It's not safe to sleep out here. Build a shelter first.", 3); return; }
     if (state.player.hunger < 15 || state.player.thirst < 15) { msgOnce('sleephungry', "You're too hungry or thirsty to sleep.", 3); return; }
+    if (state.fishMode) toggleFishing();
     state.sleeping = true;
     mouse.down = false;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Fishing
+  // ---------------------------------------------------------------------------
+  // The bobber lives in 3D: x/y on the map plus a height z (0 = water surface,
+  // negative = pulled under). The line is a verlet rope from the rod tip to the
+  // bobber. A hooked fish pulls on the bobber; reeling shortens the line, and
+  // fighting a fish that's running builds tension until the line snaps.
+  const FISH_GRAVITY = 520;     // px/s² on the bobber while it's in the air
+  const MAX_LINE = 440;         // px of line on the reel
+  const REEL_SPEED = 150;       // px/s wound in while holding the mouse
+  const ROPE_POINTS = 16;
+  const FISH_TARGET = 30;       // fish kept swimming around the player
+
+  const isWaterPx = (x, y) => {
+    const tx = Math.floor(x / TILE), ty = Math.floor(y / TILE);
+    return inBounds(tx, ty) && state.ground[ty * W + tx] === WATER;
+  };
+
+  // Things the bobber bounces off when it's low to the ground.
+  const blocksBobber = (x, y) => {
+    const tx = Math.floor(x / TILE), ty = Math.floor(y / TILE);
+    if (!inBounds(tx, ty)) return true;
+    const o = state.obj[ty * W + tx];
+    return !!o && (o.type === 'tree' || o.type === 'rock' || o.type === 'wall' || (o.type === 'door' && !o.open));
+  };
+
+  function toggleFishing() {
+    const s = state;
+    if (s.fishMode) {
+      s.fishMode = false;
+      dropLine();
+    } else {
+      if (s.tools.rod <= 0) { msgOnce('norod', 'You need a Fishing Rod. Craft one with C.', 2); return; }
+      s.fishMode = true;
+      if (s.build) { s.build = null; renderBuildBar(); }
+      msgOnce('fishhelp', 'Fishing: hold the mouse to charge a cast, release to throw it at the water. Hold again to reel in. R puts the rod away.', 30);
+    }
+    invDirty = true;
+  }
+
+  function rodTip() {
+    const p = state.player, f = state.fishing;
+    const ten = f && f.tension ? clamp(f.tension, 0, 1.2) : 0;
+    let x = p.x + Math.cos(p.face) * 18, y = p.y + Math.sin(p.face) * 18;
+    // Under tension the rod bends toward the line.
+    if (ten > 0 && f.bx !== undefined) {
+      const a = Math.atan2(f.by - p.y, f.bx - p.x);
+      x += Math.cos(a) * ten * 6;
+      y += Math.sin(a) * ten * 6;
+    }
+    return { x, y, z: 30 - ten * 12 };
+  }
+
+  function cast(f) {
+    const p = state.player, tip = rodTip();
+    const sp = 140 + f.charge * 360;
+    Object.assign(f, {
+      phase: 'flying',
+      bx: tip.x, by: tip.y, bz: tip.z,
+      vx: Math.cos(p.face) * sp, vy: Math.sin(p.face) * sp, vz: 110 + f.charge * 150,
+      L: 0, fish: null, tension: 0, snapT: 0, biteT: 0, nibbles: 0, nibbleT: 0, rippleT: 0,
+      rope: Array.from({ length: ROPE_POINTS + 1 }, () => ({ x: tip.x, y: tip.y, z: tip.z, px: tip.x, py: tip.y, pz: tip.z })),
+    });
+    p.swing = 0.25;
+  }
+
+  // Reel the line in without catching anything (putting the rod away, sleeping...).
+  function dropLine() {
+    const f = state.fishing;
+    if (f && f.fish) fleeFish(f.fish, f.bx, f.by);
+    state.fishing = null;
+  }
+
+  function splash(x, y, power) {
+    const s = state;
+    for (let i = 0; i < 6 + power * 12; i++) {
+      const a = Math.random() * Math.PI * 2, sp = 20 + Math.random() * 70 * power;
+      s.particles.push({ x, y, z: 0, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, vz: 50 + Math.random() * 130 * power });
+    }
+    ripple(x, y);
+  }
+  const ripple = (x, y) => state.ripples.push({ x, y, t: 0 });
+
+  function moveBobber(f, dt) {
+    const nx = f.bx + f.vx * dt, ny = f.by + f.vy * dt;
+    const low = f.bz < 22;
+    if (low && blocksBobber(nx, f.by)) f.vx *= -0.4; else f.bx = nx;
+    if (low && blocksBobber(f.bx, ny)) f.vy *= -0.4; else f.by = ny;
+  }
+
+  function hookFish(f, fish) {
+    fish.state = 'hooked';
+    fish.stamina = 1;
+    fish.running = false;
+    fish.runT = 0;
+    f.tension = 0;
+    splash(f.bx, f.by, 0.6);
+    addMsg('🎣 Hooked! Reel in (hold) while it rests. Let go when it runs!', 'warn');
+  }
+
+  function scareFish(f, text) {
+    fleeFish(f.fish, f.bx, f.by);
+    f.fish = null;
+    addMsg(text);
+  }
+
+  function snapLine() {
+    const s = state, f = s.fishing;
+    if (f.fish) fleeFish(f.fish, f.bx, f.by);
+    splash(f.bx, f.by, 0.5);
+    s.fishing = null;
+    addMsg('💥 Snap! The line broke and the fish got away. Ease off when it runs.', 'bad');
+    useTool('rod');
+    if (s.tools.rod <= 0) s.fishMode = false;
+  }
+
+  function landFish(f) {
+    const s = state, p = s.player, fish = f.fish;
+    s.fishes = s.fishes.filter(o => o !== fish);
+    const n = fish.size > 1.25 ? 2 : 1;
+    give('fish', n, p.x, p.y - 20);
+    addMsg(n > 1 ? '🐟 What a big one! You caught 2 Raw Fish.' : '🐟 You caught a fish!');
+    useTool('rod');
+    if (s.tools.rod <= 0) s.fishMode = false;
+  }
+
+  function updateFishing(dt) {
+    const s = state, p = s.player;
+    const pressed = mouse.pressed;
+    if (!s.fishMode || s.sleeping) return;
+    let f = s.fishing;
+    if (!f) {
+      if (pressed) s.fishing = { phase: 'charge', charge: 0, dir: 1 };
+      return;
+    }
+
+    // Charging: power swings up and down until you let go.
+    if (f.phase === 'charge') {
+      f.charge += f.dir * dt * 1.2;
+      if (f.charge >= 1) { f.charge = 1; f.dir = -1; }
+      if (f.charge <= 0.1 && f.dir < 0) { f.charge = 0.1; f.dir = 1; }
+      if (!mouse.down) cast(f);
+      return;
+    }
+
+    const reeling = mouse.down;
+    const fish = f.fish;
+
+    // Nibbles and bites
+    if (fish && pressed) {
+      if (fish.state === 'biting') hookFish(f, fish);
+      else if (fish.state === 'nibble') scareFish(f, 'You pulled too early and scared it off. Wait for the bobber to go under.');
+    }
+    if (f.fish && f.fish.state === 'nibble') {
+      f.nibbleT -= dt;
+      if (f.nibbleT <= 0) {
+        ripple(f.bx, f.by);
+        if (f.nibbles > 0) {
+          f.vz -= 35;
+          f.nibbles--;
+          f.nibbleT = 0.5 + Math.random() * 0.8;
+        } else {
+          f.fish.state = 'biting';
+          f.biteT = 0.8;
+          f.vz -= 150;
+          splash(f.bx, f.by, 0.3);
+        }
+      }
+    } else if (f.fish && f.fish.state === 'biting') {
+      f.biteT -= dt;
+      if (f.biteT <= 0) scareFish(f, 'It got away. Click as soon as the bobber goes under!');
+    }
+
+    // A hooked fish alternates between running (pulling hard) and resting.
+    const hooked = f.fish && f.fish.state === 'hooked';
+    let pull = 0;
+    if (hooked) {
+      const hf = f.fish;
+      hf.runT -= dt;
+      if (hf.runT <= 0) {
+        hf.running = !hf.running;
+        hf.runT = hf.running ? 0.7 + Math.random() * 1.1 : 0.8 + Math.random() * 1.0;
+        hf.pullDir = Math.atan2(f.by - p.y, f.bx - p.x) + (Math.random() - 0.5) * 2.2;
+      }
+      hf.stamina = Math.max(0.15, hf.stamina - dt * (0.05 + f.tension * 0.1));
+      if (f.phase === 'floating') {
+        pull = hf.size * (hf.running ? 300 : 45) * hf.stamina;
+        f.vx += Math.cos(hf.pullDir) * pull * dt;
+        f.vy += Math.sin(hf.pullDir) * pull * dt;
+        f.rippleT -= dt;
+        if (f.rippleT <= 0) { ripple(f.bx, f.by); f.rippleT = hf.running ? 0.25 : 0.7; }
+      }
+      hf.x = f.bx; hf.y = f.by; hf.heading = hf.pullDir;
+    }
+
+    // Bobber physics
+    if (f.phase === 'flying') {
+      f.vz -= FISH_GRAVITY * dt;
+      f.bz += f.vz * dt;
+      moveBobber(f, dt);
+      if (f.bz <= 0) {
+        f.bz = 0;
+        if (isWaterPx(f.bx, f.by)) {
+          f.phase = 'floating';
+          splash(f.bx, f.by, Math.min(1, -f.vz / 300));
+          f.vz *= 0.15; f.vx *= 0.25; f.vy *= 0.25;
+        } else if (f.vz < -70) {
+          f.vz = -f.vz * 0.35; f.vx *= 0.6; f.vy *= 0.6;   // bounce off the ground
+        } else {
+          f.phase = 'ground';
+          f.vz = 0;
+        }
+      }
+    } else if (f.phase === 'floating') {
+      // Buoyancy: a damped spring toward a resting depth that rocks with the waves.
+      const rest = -1.5 + Math.sin(performance.now() / 430 + f.bx * 0.05) - (hooked ? (f.fish.running ? 5 : 2) : 0);
+      f.vz += ((rest - f.bz) * 70 - f.vz * 7) * dt;
+      f.bz += f.vz * dt;
+      const drag = Math.exp(-2.5 * dt);
+      f.vx *= drag; f.vy *= drag;
+      moveBobber(f, dt);
+      if (!isWaterPx(f.bx, f.by)) { f.phase = 'ground'; f.bz = Math.max(0, f.bz); f.vz = 0; }
+    } else {
+      f.vz -= FISH_GRAVITY * dt;
+      f.bz += f.vz * dt;
+      if (f.bz <= 0) { f.bz = 0; f.vz = 0; }
+      const friction = Math.exp(-6 * dt);
+      f.vx *= friction; f.vy *= friction;
+      moveBobber(f, dt);
+      if (f.bz <= 0 && isWaterPx(f.bx, f.by)) { f.phase = 'floating'; ripple(f.bx, f.by); }
+    }
+
+    // Line length: pays out while flying, winds in while reeling.
+    const tip = rodTip();
+    const dx = f.bx - tip.x, dy = f.by - tip.y;
+    const dist = Math.hypot(dx, dy);
+    if (f.phase === 'flying') f.L = Math.min(MAX_LINE, Math.max(f.L, dist));
+    else if (reeling) f.L = Math.max(0, f.L - REEL_SPEED * dt);
+    if (dist > f.L && dist > 0) {
+      const nx = dx / dist, ny = dy / dist;
+      const outward = f.vx * nx + f.vy * ny;
+      // Not reeling: the reel lets a running fish take line instead of fighting it.
+      if (!reeling && hooked && outward > 0) f.L = Math.min(MAX_LINE, f.L + outward * dt);
+      const over = Math.max(0, dist - f.L);
+      f.bx -= nx * over;
+      f.by -= ny * over;
+      if (outward > 0) { f.vx -= nx * outward; f.vy -= ny * outward; }
+    }
+
+    // Tension builds when you reel against a fish that's pulling away.
+    const taut = f.phase !== 'flying' && dist >= f.L - 0.5;
+    let target = 0;
+    if (taut && hooked) target = (pull / 380) * (reeling ? 1.25 : 0.55) + (reeling ? 0.25 : 0);
+    else if (taut && reeling) target = 0.12;
+    f.tension += (target - f.tension) * Math.min(1, dt * 6);
+    if (hooked && f.tension > 1) {
+      f.snapT += dt;
+      if (f.snapT > 0.35) { snapLine(); return; }
+    } else f.snapT = Math.max(0, f.snapT - dt);
+    if (hooked && f.L >= MAX_LINE - 1) {
+      scareFish(f, 'The fish ran off with all your line and got away.');
+    }
+
+    // Back at your feet: the line is in (with a fish, if one is on).
+    if (f.phase !== 'flying' && Math.hypot(f.bx - p.x, f.by - p.y) < 24) {
+      if (f.fish && f.fish.state === 'hooked') landFish(f);
+      else if (f.fish) fleeFish(f.fish, f.bx, f.by);
+      s.fishing = null;
+      return;
+    }
+
+    updateRope(f, tip, dt);
+  }
+
+  // Verlet rope: sags under gravity, rests on the water, and never stretches past its length.
+  function updateRope(f, tip, dt) {
+    const pts = f.rope, n = pts.length - 1;
+    const end = { x: f.bx, y: f.by, z: Math.max(f.bz, 0) + 3 };
+    const straight = Math.hypot(end.x - tip.x, end.y - tip.y, end.z - tip.z);
+    const seg = Math.min(Math.max(f.L, straight), straight + 70) / n;
+    const t = performance.now() / 1000;
+    for (let i = 1; i < n; i++) {
+      const q = pts[i];
+      const vx = (q.x - q.px) * 0.97, vy = (q.y - q.py) * 0.97, vz = (q.z - q.pz) * 0.97;
+      q.px = q.x; q.py = q.y; q.pz = q.z;
+      q.x += vx + Math.sin(t * 1.7 + i * 0.6) * 0.03;
+      q.y += vy;
+      q.z += vz - 260 * dt * dt;
+      if (q.z < 0) q.z = 0;
+    }
+    Object.assign(pts[0], tip);
+    Object.assign(pts[n], end);
+    for (let k = 0; k < 10; k++) {
+      for (let i = 0; i < n; i++) {
+        const a = pts[i], b = pts[i + 1];
+        const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+        const d = Math.hypot(dx, dy, dz) || 0.0001;
+        if (d <= seg) continue;
+        const diff = (d - seg) / d;
+        const wa = i === 0 ? 0 : (i + 1 === n ? 1 : 0.5);
+        const wb = i + 1 === n ? 0 : (i === 0 ? 1 : 0.5);
+        a.x += dx * diff * wa; a.y += dy * diff * wa; a.z += dz * diff * wa;
+        b.x -= dx * diff * wb; b.y -= dy * diff * wb; b.z -= dz * diff * wb;
+      }
+    }
+  }
+
+  // ---- Fish swimming in the water ----
+  function spawnFishNear(n) {
+    const s = state, p = s.player;
+    const ptx = p.x / TILE, pty = p.y / TILE;
+    for (let tries = 0; tries < n * 60 && n > 0; tries++) {
+      const tx = Math.floor(ptx + (Math.random() - 0.5) * 60), ty = Math.floor(pty + (Math.random() - 0.5) * 60);
+      if (!inBounds(tx, ty) || s.ground[ty * W + tx] !== WATER || Math.hypot(tx - ptx, ty - pty) < 8) continue;
+      const x = tx * TILE + 16, y = ty * TILE + 16;
+      s.fishes.push({
+        x, y, vx: 0, vy: 0, tx: x, ty: y, heading: Math.random() * Math.PI * 2,
+        size: 0.7 + Math.random() * 0.7, seed: Math.random() * 10, state: 'wander', timer: 0,
+      });
+      n--;
+    }
+  }
+
+  function fleeFish(fish, fromX, fromY) {
+    const a = Math.atan2(fish.y - fromY, fish.x - fromX) + (Math.random() - 0.5);
+    fish.state = 'flee';
+    fish.tx = fish.x + Math.cos(a) * 160;
+    fish.ty = fish.y + Math.sin(a) * 160;
+    fish.timer = 2.5;
+  }
+
+  function updateFishes(dt) {
+    const s = state, f = s.fishing;
+    const bob = f && f.phase === 'floating' ? f : null;
+    for (const fish of s.fishes) {
+      if (fish.state === 'hooked') continue;   // it moves with the bobber
+      fish.timer -= dt;
+      let speed = 28;
+      if (fish.state === 'flee') {
+        speed = 95;
+        if (fish.timer <= 0) fish.state = 'wander';
+      } else if (fish.state === 'wander') {
+        if (bob && !bob.fish && Math.hypot(bob.bx - fish.x, bob.by - fish.y) < 160 && Math.random() < 0.35 * dt) fish.state = 'interested';
+      }
+      if (fish.state === 'interested' || fish.state === 'nibble' || fish.state === 'biting') {
+        if (!bob || (bob.fish && bob.fish !== fish)) {
+          fish.state = 'wander';
+        } else {
+          fish.tx = bob.bx; fish.ty = bob.by;
+          speed = fish.state === 'interested' ? 45 : 12;
+          if (fish.state === 'interested' && Math.hypot(bob.bx - fish.x, bob.by - fish.y) < 10) {
+            fish.state = 'nibble';
+            bob.fish = fish;
+            bob.nibbles = Math.floor(Math.random() * 3);
+            bob.nibbleT = 0.6;
+          }
+        }
+      }
+      if (fish.state === 'wander' && (fish.timer <= 0 || Math.hypot(fish.tx - fish.x, fish.ty - fish.y) < 8)) {
+        for (let k = 0; k < 5; k++) {
+          const nx = fish.x + (Math.random() - 0.5) * 240, ny = fish.y + (Math.random() - 0.5) * 240;
+          if (isWaterPx(nx, ny)) { fish.tx = nx; fish.ty = ny; break; }
+        }
+        fish.timer = 3 + Math.random() * 4;
+      }
+      // Steer toward the target, turning gradually.
+      const dx = fish.tx - fish.x, dy = fish.ty - fish.y, d = Math.hypot(dx, dy) || 1;
+      const k = Math.min(1, dt * 2);
+      fish.vx += ((dx / d) * speed - fish.vx) * k;
+      fish.vy += ((dy / d) * speed - fish.vy) * k;
+      const nx = fish.x + fish.vx * dt, ny = fish.y + fish.vy * dt;
+      if (isWaterPx(nx, ny)) { fish.x = nx; fish.y = ny; }
+      else { fish.vx *= -0.5; fish.vy *= -0.5; fish.timer = 0; }
+      if (Math.hypot(fish.vx, fish.vy) > 2) fish.heading = Math.atan2(fish.vy, fish.vx);
+    }
+  }
+
+  function updateSplashes(dt) {
+    const s = state;
+    for (const q of s.particles) {
+      q.vz -= 400 * dt;
+      q.x += q.vx * dt; q.y += q.vy * dt; q.z += q.vz * dt;
+    }
+    s.particles = s.particles.filter(q => q.z >= 0);
+    for (const r of s.ripples) r.t += dt;
+    s.ripples = s.ripples.filter(r => r.t < 1);
   }
 
   // ---------------------------------------------------------------------------
@@ -635,7 +1033,11 @@
     // Actions
     p.cooldown -= dt;
     p.swing = Math.max(0, p.swing - dt);
-    if (mouse.down && p.cooldown <= 0 && !s.sleeping) act();
+    if (s.fishMode) updateFishing(dt);
+    else if (mouse.down && p.cooldown <= 0 && !s.sleeping) act();
+    mouse.pressed = false;
+    updateFishes(dt);
+    updateSplashes(dt);
 
     // World ticks
     s.tickAcc += dt * timeMul;
@@ -679,6 +1081,9 @@
     if (c.tree < s.targets.tree) spawnSome('tree', 4, [GRASS]);
     if (c.rock < s.targets.rock) spawnSome('rock', 1, [GRASS, SAND]);
     if (c.bush < s.targets.bush) spawnSome('bush', 1, [GRASS]);
+    // Keep fish around the player: drop far-away ones, add new ones nearby.
+    s.fishes = s.fishes.filter(f => f.state === 'hooked' || Math.hypot(f.x - p.x, f.y - p.y) < TILE * 50);
+    if (s.fishes.length < FISH_TARGET) spawnFishNear(Math.min(6, FISH_TARGET - s.fishes.length));
   }
 
   function die() {
@@ -725,12 +1130,13 @@
         drawGround(tx, ty, t);
         if (s.floor[ty * W + tx]) drawFloor(tx * TILE, ty * TILE);
       }
+    drawFishes(t);
 
     // Hover highlight
     const hv = hoverTile();
     if (hv && !s.sleeping && !s.dead) {
       const ok = inReach(hv.tx, hv.ty);
-      if (!s.build) {
+      if (!s.build && !s.fishMode) {
         ctx.strokeStyle = ok ? 'rgba(255,255,255,0.55)' : 'rgba(255,90,90,0.35)';
         ctx.lineWidth = 2;
         ctx.strokeRect(hv.tx * TILE + 1, hv.ty * TILE + 1, TILE - 2, TILE - 2);
@@ -747,6 +1153,7 @@
       if (ty === pRow) drawPlayer(p, t);
     }
     if (pRow < ty0 || pRow > ty1) drawPlayer(p, t);
+    drawFishingLine();
 
     // Build ghost
     if (s.build && hv && !s.dead) {
@@ -775,6 +1182,7 @@
     ctx.restore();
 
     drawLighting(t);
+    drawTensionMeter();
 
     // Red flash when taking damage
     if (p.hurt > 0) {
@@ -987,6 +1395,17 @@
       }
     }
 
+    if (state.fishMode) {
+      const tip = rodTip();
+      const hx = x + Math.cos(p.face) * 7, hy = y + Math.sin(p.face) * 7 + 2;
+      ctx.strokeStyle = '#7a5230';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(hx, hy);
+      ctx.quadraticCurveTo((hx + tip.x) / 2, (hy + tip.y - tip.z) / 2 - 6, tip.x, tip.y - tip.z);
+      ctx.stroke();
+    }
+
     circle(x, y + 2, 11, state.sleeping ? '#5a6ea8' : '#3f6fd1');   // body / shirt
     circle(x, y - 3, 8, '#f1c27d');                                 // head
     ctx.fillStyle = '#5a3a1e';                                       // hair
@@ -1003,6 +1422,114 @@
       circle(x - 3 + ex, y - 3 + ey, 1.4, '#222');
       circle(x + 3 + ex, y - 3 + ey, 1.4, '#222');
     }
+  }
+
+  // Fish are dark shapes under the water; ripples sit on the surface.
+  function drawFishes(t) {
+    const s = state;
+    for (const fish of s.fishes) {
+      if (fish.x < camX - 40 || fish.x > camX + vw + 40 || fish.y < camY - 40 || fish.y > camY + vh + 40) continue;
+      const len = 9 * fish.size, wid = 3.5 * fish.size;
+      const hooked = fish.state === 'hooked';
+      ctx.save();
+      ctx.translate(fish.x, fish.y);
+      ctx.rotate(fish.heading);
+      ctx.fillStyle = hooked ? 'rgba(40,60,110,0.8)' : 'rgba(18,40,85,0.45)';
+      ctx.beginPath();
+      ctx.ellipse(0, 0, len, wid, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.translate(-len * 0.8, 0);
+      ctx.rotate(Math.sin(t * (hooked ? 25 : 8) + fish.seed) * 0.4);
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(-len * 0.8, -wid * 1.2);
+      ctx.lineTo(-len * 0.8, wid * 1.2);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+    ctx.lineWidth = 1.2;
+    for (const r of s.ripples) {
+      ctx.strokeStyle = `rgba(255,255,255,${(1 - r.t) * 0.6})`;
+      ctx.beginPath();
+      ctx.ellipse(r.x, r.y, 3 + r.t * 22, (3 + r.t * 22) * 0.5, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
+  function drawFishingLine() {
+    const s = state, p = s.player, f = s.fishing;
+    ctx.fillStyle = 'rgba(200,230,255,0.9)';
+    for (const q of s.particles) ctx.fillRect(q.x - 1, q.y - q.z - 1, 2, 2);
+    if (!f) return;
+
+    if (f.phase === 'charge') {
+      // Power meter over your head and a dotted preview of the throw.
+      const mx = p.x - 18, my = p.y - 36;
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillRect(mx - 1, my - 1, 38, 7);
+      ctx.fillStyle = `hsl(${120 - f.charge * 120}, 80%, 55%)`;
+      ctx.fillRect(mx, my, 36 * f.charge, 5);
+      const tip = rodTip();
+      const sp = 140 + f.charge * 360, vz = 110 + f.charge * 150;
+      const flight = (vz + Math.sqrt(vz * vz + 2 * FISH_GRAVITY * tip.z)) / FISH_GRAVITY;
+      const cos = Math.cos(p.face), sin = Math.sin(p.face);
+      ctx.fillStyle = 'rgba(255,255,255,0.65)';
+      for (let k = 1; k < 12; k++) {
+        const u = (flight * k) / 12;
+        const z = tip.z + vz * u - 0.5 * FISH_GRAVITY * u * u;
+        circle(tip.x + cos * sp * u, tip.y + sin * sp * u - z, 1.5, 'rgba(255,255,255,0.65)');
+      }
+      const lx = tip.x + cos * sp * flight, ly = tip.y + sin * sp * flight;
+      ctx.strokeStyle = isWaterPx(lx, ly) ? 'rgba(140,215,255,0.95)' : 'rgba(255,140,140,0.85)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.ellipse(lx, ly, 7, 3.5, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      return;
+    }
+
+    // Line
+    const pts = f.rope;
+    ctx.strokeStyle = f.tension > 0.85 ? 'rgba(255,120,120,0.95)' : 'rgba(245,245,245,0.85)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y - pts[0].z);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y - pts[i].z);
+    ctx.stroke();
+
+    // Bobber (fades as it's pulled under)
+    const by = f.by - Math.max(0, f.bz);
+    if (f.bz > 2) shadow(f.bx, f.by + 2, 4, 1.5);
+    ctx.globalAlpha = 1 - clamp(-f.bz / 6, 0, 1) * 0.75;
+    circle(f.bx, by, 4, '#f4f4f4');
+    ctx.fillStyle = '#e23b3b';
+    ctx.beginPath();
+    ctx.arc(f.bx, by, 4, Math.PI, 0);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  function drawTensionMeter() {
+    const f = state.fishing;
+    if (!f || !f.fish || f.fish.state !== 'hooked') return;
+    const w = 240, x = vw / 2 - w / 2, y = vh - 150;
+    ctx.fillStyle = 'rgba(20,22,28,0.75)';
+    ctx.fillRect(x - 10, y - 26, w + 20, 46);
+    ctx.font = 'bold 13px system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = f.fish.running ? '#ffcf7a' : '#9be38f';
+    ctx.fillText(f.fish.running ? "🐟 It's running! Let go!" : "🐟 It's resting. Reel in!", x, y - 9);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.font = '11px system-ui, sans-serif';
+    ctx.fillText(`${Math.max(0, Math.round((MAX_LINE - f.L) / TILE))} m of line left`, x + w, y - 9);
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.fillRect(x, y, w, 9);
+    ctx.fillStyle = f.tension > 1 ? '#ff4d4d' : f.tension > 0.75 ? '#ffc04d' : '#6ddc6a';
+    ctx.fillRect(x, y, (w * clamp(f.tension, 0, 1.2)) / 1.2, 9);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(x + w / 1.2 - 1, y - 3, 2, 15);   // snap point
   }
 
   function drawLighting(t) {
@@ -1117,7 +1644,10 @@
     else if (s.nearFire) status = '<span class="warm">🔥 Warm by the fire</span>';
     else if (s.cold) status = '<span class="cold">❄️ Freezing</span>';
     else if (isNight()) status = '<span class="cold">Cold night</span>';
-    if (s.build) status += ' · 🔨 Build mode';
+    const modes = [];
+    if (s.build) modes.push('🔨 Build mode');
+    if (s.fishMode) modes.push('🎣 Fishing');
+    if (modes.length) status += (status ? ' · ' : '') + modes.join(' · ');
     const st = $('status');
     if (st.innerHTML !== status) st.innerHTML = status;
     show('sleep', s.sleeping);
@@ -1138,8 +1668,9 @@
       if (s.tools[id] <= 0) continue;
       any = true;
       const el = document.createElement('div');
-      el.className = 'slot';
-      el.innerHTML = `${t.icon}<div class="dur"><i style="width:${(s.tools[id] / TOOL_DURABILITY) * 100}%"></i></div><span class="tip">${t.name} (${s.tools[id]}/${TOOL_DURABILITY})</span>`;
+      el.className = 'slot' + (id === 'rod' ? ' clickable' + (s.fishMode ? ' active' : '') : '');
+      el.innerHTML = `${t.icon}<div class="dur"><i style="width:${(s.tools[id] / TOOL_DURABILITY) * 100}%"></i></div><span class="tip">${t.name} (${s.tools[id]}/${TOOL_DURABILITY})${id === 'rod' ? ' · R or click to fish' : ''}</span>`;
+      if (id === 'rod') el.addEventListener('click', toggleFishing);
       hotbarEl.appendChild(el);
     }
     for (const id of ITEM_ORDER) {
@@ -1196,6 +1727,7 @@
   function toggleBuild() {
     state.build = state.build ? null : 'wall';
     if (state.build) {
+      if (state.fishMode) toggleFishing();
       show('craft', false);
       msgOnce('buildhelp', 'Build mode: press 1–4 to choose, click to place, right-click to remove. B or Esc to exit.', 30);
     }
@@ -1230,7 +1762,7 @@
       return;
     }
     if (e.code === 'KeyP') { setPaused(true); return; }
-    if (e.code === 'Escape' && !isOpen('craft') && !isOpen('help') && !state.build) { setPaused(true); return; }
+    if (e.code === 'Escape' && !isOpen('craft') && !isOpen('help') && !state.build && !state.fishMode) { setPaused(true); return; }
     if (state.sleeping) {
       state.sleeping = false;
       addMsg('You wake up.');
@@ -1246,9 +1778,11 @@
       case 'KeyF': eatBest(); break;
       case 'KeyE': drinkNearby(); break;
       case 'KeyZ': trySleep(); break;
+      case 'KeyR': toggleFishing(); break;
       case 'Escape':
         show('craft', false); show('help', false);
         if (state.build) { state.build = null; renderBuildBar(); }
+        if (state.fishMode) toggleFishing();
         break;
       case 'Digit1': case 'Digit2': case 'Digit3': case 'Digit4':
         if (state.build) { state.build = BUILDS[+e.code.slice(5) - 1].id; renderBuildBar(); }
@@ -1270,6 +1804,7 @@
     if (e.button !== 0) return;
     mouse.shift = e.shiftKey;
     mouse.down = true;
+    mouse.pressed = true;
     state.player.cooldown = Math.min(state.player.cooldown, 0);
   });
   window.addEventListener('mouseup', () => { mouse.down = false; });
@@ -1312,4 +1847,9 @@
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
+
+  // Test hook: open index.html?debug to poke at the game from the console.
+  if (location.search.includes('debug')) {
+    window.__game = { get state() { return state; }, get cam() { return [camX, camY]; }, mouse, keys, give, toggleFishing, isWaterPx };
+  }
 })();

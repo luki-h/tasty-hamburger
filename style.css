@@ -83,6 +83,9 @@ button.secondary:hover { background: rgba(255, 255, 255, 0.25); }
 }
 .slot.food { cursor: pointer; }
 .slot.food:hover { background: rgba(255, 255, 255, 0.18); }
+.slot.clickable { cursor: pointer; }
+.slot.clickable:hover { background: rgba(255, 255, 255, 0.18); }
+.slot.active { outline: 2px solid #8fd3ff; background: rgba(143, 211, 255, 0.18); }
 .slot .count {
   position: absolute; right: 4px; bottom: 2px;
   font-size: 12px; font-weight: 700; text-shadow: 0 1px 2px #000;
