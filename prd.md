@@ -1,0 +1,2 @@
+who plays:1 player plays on one device
+on screen:a survival game were you have thirst bar, health bar, and hunger bar.you can collect resources and and make tools, with your tools you can collect like wood to build shelters

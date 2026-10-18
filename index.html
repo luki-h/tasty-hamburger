@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tasty Hamburger — Survival</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <div id="hud" class="hidden">
+    <div id="bars">
+      <div class="bar" id="bar-health"><span class="label">❤️ Health</span><div class="track"><div class="fill"></div></div><span class="val"></span></div>
+      <div class="bar" id="bar-hunger"><span class="label">🍖 Hunger</span><div class="track"><div class="fill"></div></div><span class="val"></span></div>
+      <div class="bar" id="bar-thirst"><span class="label">💧 Thirst</span><div class="track"><div class="fill"></div></div><span class="val"></span></div>
+    </div>
+    <div id="clock"><div id="day"></div><div id="status"></div></div>
+    <button id="pause-btn" title="Pause (P)" aria-label="Pause game">⏸</button>
+    <div id="log"></div>
+    <div id="buildbar" class="hidden"></div>
+    <div id="hotbar"></div>
+    <div id="hint">C craft · B build · F eat · E drink · Z sleep · P pause · H help</div>
+  </div>
+
+  <div id="craft" class="panel hidden">
+    <h2>Crafting</h2>
+    <div id="recipes"></div>
+    <p class="small">Press C or Esc to close</p>
+  </div>
+
+  <div id="help" class="panel hidden">
+    <h2>How to survive</h2>
+    <ul>
+      <li><b>WASD / arrows</b>: move</li>
+      <li><b>Left click</b> (hold): gather, chop, mine, drink, open doors, feed fires</li>
+      <li><b>Right click</b> or <b>Shift+click</b>: take apart something you built (full refund)</li>
+      <li><b>C</b>: crafting · <b>B</b>: build mode (<b>1–4</b> pick, click to place)</li>
+      <li><b>F</b>: eat · <b>E</b>: drink from nearby water · <b>Z</b>: sleep (in a shelter at night)</li>
+      <li><b>P</b> or <b>Esc</b>: pause · <b>Esc</b> also closes panels and leaves build mode</li>
+    </ul>
+    <h3>Tips</h3>
+    <ul>
+      <li>Pick up sticks and pebbles by hand, then craft a <b>Stone Axe</b> to chop trees for wood.</li>
+      <li>Nights are cold. You lose health outside unless you're near a lit campfire or inside a shelter.</li>
+      <li>A <b>shelter</b> is a fully floored room closed in by walls and a <i>closed</i> door.</li>
+      <li>Campfires burn wood. Click one while holding wood to add fuel. Cook a Berry Pie next to one.</li>
+      <li>When hunger and thirst are both above half, your health slowly comes back.</li>
+    </ul>
+    <p class="small">Press H or Esc to close</p>
+  </div>
+
+  <div id="title" class="overlay">
+    <div class="card">
+      <h1>🍔 Tasty Hamburger</h1>
+      <p class="tag">Survive on a wild island. Keep yourself fed, drink water, and build a shelter before night falls.</p>
+      <button id="start">Start game</button>
+      <p class="small">WASD to move · click to gather · C craft · B build · H help</p>
+    </div>
+  </div>
+
+  <div id="gameover" class="overlay hidden">
+    <div class="card">
+      <h1>You died</h1>
+      <p id="death-reason"></p>
+      <p id="survived"></p>
+      <button id="restart">Try again</button>
+    </div>
+  </div>
+
+  <div id="paused" class="overlay hidden">
+    <div class="card">
+      <h1>⏸ Paused</h1>
+      <button id="resume">Resume</button>
+      <br>
+      <button id="pause-restart" class="secondary">Restart</button>
+      <p class="small">Press P or Esc to resume</p>
+    </div>
+  </div>
+
+  <div id="sleep" class="hidden">Zzz… sleeping until dawn. Press any key to wake up.</div>
+
+  <script src="game.js"></script>
+</body>
+</html>
