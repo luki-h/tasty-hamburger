@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tasty Hamburger — Survival</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <div id="underwater" class="hidden"></div>
+  <div id="hurt"></div>
+
+  <div id="hud" class="hidden">
+    <div id="crosshair"></div>
+    <div id="bars">
+      <div class="bar" id="bar-health"><span class="label">❤️ Health</span><div class="track"><div class="fill"></div></div><span class="val"></span></div>
+      <div class="bar" id="bar-hunger"><span class="label">🍖 Hunger</span><div class="track"><div class="fill"></div></div><span class="val"></span></div>
+      <div class="bar" id="bar-thirst"><span class="label">💧 Thirst</span><div class="track"><div class="fill"></div></div><span class="val"></span></div>
+    </div>
+    <div id="clock"><div id="day"></div><div id="status"></div></div>
+    <button id="pause-btn" title="Pause (P)" aria-label="Pause game">⏸</button>
+    <div id="log"></div>
+    <div id="target-name"></div>
+    <div id="selected-name"></div>
+    <div id="tools"></div>
+    <div id="hotbar"></div>
+    <div id="hint">1–9 select · C craft · F eat · E drink · Z sleep · P pause · H help</div>
+  </div>
+
+  <div id="craft" class="panel hidden">
+    <h2>Crafting</h2>
+    <div id="recipes"></div>
+    <h3>Inventory</h3>
+    <p class="small">Click an item to put it in your selected hotbar slot.</p>
+    <div id="inventory"></div>
+    <p class="small">Press C or Esc to close</p>
+  </div>
+
+  <div id="help" class="panel hidden">
+    <h2>How to survive</h2>
+    <ul>
+      <li><b>WASD</b>: move · <b>Space</b>: jump / swim up · <b>Shift</b>: sprint · <b>Mouse</b>: look around</li>
+      <li><b>Left click</b> (hold): break blocks, pick berries</li>
+      <li><b>Right click</b>: place the selected block, eat, open/close doors, add fuel to campfires</li>
+      <li><b>1–9</b> or <b>mouse wheel</b>: choose a hotbar slot</li>
+      <li><b>C</b>: crafting · <b>F</b>: eat · <b>E</b>: drink (look at water or stand in it) · <b>Z</b>: sleep</li>
+      <li><b>P</b> or <b>Esc</b>: pause</li>
+    </ul>
+    <h3>Tips</h3>
+    <ul>
+      <li>Break <b>leaves</b> with your hands for sticks, and grey speckled <b>gravel</b> for pebbles.</li>
+      <li>Craft a <b>Stone Axe</b> to chop logs, and a <b>Stone Pickaxe</b> to mine stone.</li>
+      <li>Turn logs into planks, then build walls, a roof and a door around you.</li>
+      <li>Nights are cold. You lose health outside unless you're near a lit campfire or inside a shelter.</li>
+      <li>A <b>shelter</b> has a roof over your head and walls on all four sides. A door only counts when it's closed.</li>
+      <li>Campfires burn out. Right-click one while holding sticks or logs to add fuel. Cook a Berry Pie next to one.</li>
+      <li>When hunger and thirst are both above half, your health slowly comes back.</li>
+    </ul>
+    <p class="small">Press H or Esc to close</p>
+  </div>
+
+  <div id="title" class="overlay">
+    <div class="card">
+      <h1>🍔 Tasty Hamburger</h1>
+      <p class="tag">Survive on a wild island. Keep yourself fed, drink water, and build a shelter before night falls.</p>
+      <button id="start">Start game</button>
+      <p class="small">WASD move · mouse look · left click break · right click place · H help</p>
+      <p id="load-error" class="small hidden">Couldn't load the 3D engine. Check your internet connection and refresh.</p>
+    </div>
+  </div>
+
+  <div id="gameover" class="overlay hidden">
+    <div class="card">
+      <h1>You died</h1>
+      <p id="death-reason"></p>
+      <p id="survived"></p>
+      <button id="restart">Try again</button>
+    </div>
+  </div>
+
+  <div id="paused" class="overlay hidden">
+    <div class="card">
+      <h1>⏸ Paused</h1>
+      <button id="resume">Resume</button>
+      <br>
+      <button id="pause-restart" class="secondary">Restart</button>
+      <p class="small">Click Resume or press P to keep playing</p>
+    </div>
+  </div>
+
+  <div id="sleep" class="hidden">Zzz… sleeping until dawn. Press any key to wake up.</div>
+
+  <script src="https://cdn.jsdelivr.net/npm/three@0.150.1/build/three.min.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
