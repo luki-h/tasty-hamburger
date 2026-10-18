@@ -4,37 +4,17 @@ html, body {
   margin: 0;
   height: 100%;
   overflow: hidden;
-  background: #87b8ff;
+  background: #1d3b6e;
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color: #f4f1e8;
   user-select: none;
 }
 
-canvas { display: block; }
+canvas { display: block; cursor: crosshair; }
 
 .hidden { display: none !important; }
 
-#underwater {
-  position: fixed; inset: 0; pointer-events: none;
-  background: rgba(30, 70, 170, 0.45);
-}
-#hurt {
-  position: fixed; inset: 0; pointer-events: none;
-  background: rgba(200, 0, 0, 1); opacity: 0;
-}
-
 /* ---------- HUD ---------- */
-#crosshair {
-  position: fixed; left: 50%; top: 50%;
-  width: 20px; height: 20px; transform: translate(-50%, -50%);
-  pointer-events: none; mix-blend-mode: difference;
-}
-#crosshair::before, #crosshair::after {
-  content: ""; position: absolute; background: #fff;
-}
-#crosshair::before { left: 9px; top: 0; width: 2px; height: 20px; }
-#crosshair::after { top: 9px; left: 0; width: 20px; height: 2px; }
-
 #bars {
   position: fixed; top: 12px; left: 12px;
   display: flex; flex-direction: column; gap: 6px;
@@ -62,6 +42,8 @@ canvas { display: block; }
   background: rgba(20, 22, 28, 0.6); border-radius: 10px;
 }
 #pause-btn:hover { background: rgba(60, 64, 76, 0.8); }
+button.secondary { background: rgba(255, 255, 255, 0.15); color: #f4f1e8; font-size: 14px; padding: 7px 16px; }
+button.secondary:hover { background: rgba(255, 255, 255, 0.25); }
 
 #clock {
   position: fixed; top: 12px; right: 64px;
@@ -75,7 +57,7 @@ canvas { display: block; }
 #status .safe { color: #9be38f; }
 
 #log {
-  position: fixed; left: 12px; bottom: 110px;
+  position: fixed; left: 12px; bottom: 96px;
   display: flex; flex-direction: column; gap: 4px; max-width: 420px;
   pointer-events: none;
 }
@@ -87,68 +69,64 @@ canvas { display: block; }
 #log div.warn { color: #ffcf7a; }
 #log div.bad { color: #ff8a8a; }
 
-#target-name {
-  position: fixed; left: 50%; top: calc(50% + 22px); transform: translateX(-50%);
-  font-size: 12px; text-shadow: 0 1px 2px #000; pointer-events: none;
-}
-
-#selected-name {
-  position: fixed; left: 50%; bottom: 86px; transform: translateX(-50%);
-  font-size: 14px; font-weight: 700; text-shadow: 0 1px 3px #000;
-  pointer-events: none; transition: opacity 0.4s;
-}
-
-/* Minecraft-style hotbar */
 #hotbar {
-  position: fixed; left: 50%; bottom: 12px; transform: translateX(-50%);
-  display: flex; gap: 0; padding: 3px;
-  background: rgba(0, 0, 0, 0.55); border: 2px solid #1b1b1b;
+  position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%);
+  display: flex; gap: 6px; padding: 6px; border-radius: 12px;
+  background: rgba(20, 22, 28, 0.6);
+  min-height: 64px;
 }
 .slot {
-  position: relative; width: 56px; height: 56px;
+  position: relative; width: 52px; height: 52px; border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
   display: flex; align-items: center; justify-content: center;
-  border: 3px solid #8b8b8b; border-right-color: #373737; border-bottom-color: #373737;
-  background: rgba(139, 139, 139, 0.35);
-  font-size: 28px;
+  font-size: 26px;
 }
-.slot.sel { outline: 3px solid #fff; outline-offset: -1px; z-index: 1; }
-.slot img { width: 34px; height: 34px; image-rendering: pixelated; }
+.slot.food { cursor: pointer; }
+.slot.food:hover { background: rgba(255, 255, 255, 0.18); }
 .slot .count {
-  position: absolute; right: 3px; bottom: 0;
-  font-size: 15px; font-weight: 800; text-shadow: 2px 2px 0 #3f3f3f;
+  position: absolute; right: 4px; bottom: 2px;
+  font-size: 12px; font-weight: 700; text-shadow: 0 1px 2px #000;
 }
-.slot .key {
-  position: absolute; left: 3px; top: 1px; font-size: 10px; opacity: 0.55;
-}
-
-#tools {
-  position: fixed; bottom: 18px; left: calc(50% - 292px); transform: translateX(-100%);
-  display: flex; gap: 6px;
-}
-.tool {
-  width: 48px; height: 48px; border-radius: 8px; position: relative;
-  display: flex; align-items: center; justify-content: center; font-size: 24px;
-  background: rgba(20, 22, 28, 0.6);
-}
-.tool .dur {
+.slot .dur {
   position: absolute; left: 5px; right: 5px; bottom: 4px; height: 4px; border-radius: 2px;
-  background: rgba(0, 0, 0, 0.5); overflow: hidden;
+  background: rgba(0, 0, 0, 0.4); overflow: hidden;
 }
-.tool .dur i { display: block; height: 100%; background: #7ddc6a; }
+.slot .dur i { display: block; height: 100%; background: #7ddc6a; }
+.slot .tip {
+  position: absolute; bottom: 58px; left: 50%; transform: translateX(-50%);
+  white-space: nowrap; font-size: 12px; padding: 3px 7px; border-radius: 5px;
+  background: rgba(0, 0, 0, 0.8); display: none;
+}
+.slot:hover .tip { display: block; }
+.empty-hint { align-self: center; font-size: 13px; opacity: 0.7; padding: 0 12px; }
 
 #hint {
   position: fixed; right: 12px; bottom: 14px;
-  font-size: 12px; opacity: 0.8;
+  font-size: 12px; opacity: 0.75;
   padding: 5px 9px; border-radius: 6px; background: rgba(20, 22, 28, 0.5);
 }
-@media (max-width: 1100px) { #hint, #tools { display: none; } }
+
+#buildbar {
+  position: fixed; left: 50%; bottom: 92px; transform: translateX(-50%);
+  display: flex; gap: 6px; padding: 6px; border-radius: 12px;
+  background: rgba(40, 30, 15, 0.8); border: 1px solid rgba(255, 200, 120, 0.4);
+}
+.bopt {
+  width: 92px; padding: 6px; border-radius: 8px; text-align: center; cursor: pointer;
+  background: rgba(255, 255, 255, 0.07); font-size: 12px;
+  border: 2px solid transparent;
+}
+.bopt .ic { font-size: 22px; }
+.bopt.sel { border-color: #ffc36b; background: rgba(255, 195, 107, 0.15); }
+.bopt.no { opacity: 0.5; }
+.bopt .key { opacity: 0.6; }
 
 /* ---------- Panels ---------- */
 .panel {
   position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-  width: min(500px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto;
+  width: min(460px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto;
   padding: 18px 20px; border-radius: 14px;
-  background: rgba(24, 26, 34, 0.95); border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(24, 26, 34, 0.94); border: 1px solid rgba(255, 255, 255, 0.12);
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
 }
 .panel h2 { margin: 0 0 12px; font-size: 20px; }
@@ -158,21 +136,15 @@ canvas { display: block; }
 
 .recipe {
   display: flex; align-items: center; gap: 12px;
-  padding: 8px 10px; border-radius: 10px; margin-bottom: 6px;
+  padding: 10px; border-radius: 10px; margin-bottom: 8px;
   background: rgba(255, 255, 255, 0.05);
 }
-.recipe .ic { font-size: 26px; width: 36px; text-align: center; }
-.recipe .ic img { width: 30px; height: 30px; image-rendering: pixelated; }
+.recipe .ic { font-size: 30px; width: 40px; text-align: center; }
 .recipe .info { flex: 1; }
 .recipe .name { font-weight: 700; }
 .recipe .desc { font-size: 12px; opacity: 0.75; }
 .recipe .cost { font-size: 12px; margin-top: 3px; }
 .recipe .cost .miss { color: #ff8a8a; }
-
-#inventory { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
-#inventory .slot { cursor: pointer; }
-#inventory .slot:hover { background: rgba(255, 255, 255, 0.25); }
-#inventory .empty { font-size: 13px; opacity: 0.6; }
 
 button {
   font: inherit; font-weight: 700; color: #1b1b1b;
@@ -181,29 +153,25 @@ button {
 }
 button:hover { background: #ffd48f; }
 button:disabled { background: #5a5a5a; color: #aaa; cursor: not-allowed; }
-button.secondary { background: rgba(255, 255, 255, 0.15); color: #f4f1e8; font-size: 14px; padding: 7px 16px; }
-button.secondary:hover { background: rgba(255, 255, 255, 0.25); }
 
 /* ---------- Overlays ---------- */
 .overlay {
   position: fixed; inset: 0;
   display: flex; align-items: center; justify-content: center;
-  background: rgba(10, 14, 24, 0.45);
+  background: rgba(10, 14, 24, 0.55);
 }
 .card {
   width: min(460px, calc(100vw - 32px)); text-align: center;
   padding: 28px; border-radius: 16px;
-  background: rgba(24, 26, 34, 0.92); border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(24, 26, 34, 0.95); border: 1px solid rgba(255, 255, 255, 0.12);
 }
 .card h1 { margin: 0 0 10px; }
 .card .tag { line-height: 1.5; opacity: 0.9; }
 .card button { font-size: 17px; padding: 10px 22px; margin: 10px 0; }
-#load-error { color: #ff8a8a; opacity: 1; }
 
 #sleep {
   position: fixed; inset: 0;
   display: flex; align-items: center; justify-content: center;
-  background: rgba(0, 0, 10, 0.6);
+  background: rgba(0, 0, 10, 0.55);
   font-size: 22px; pointer-events: none;
 }
-.recipe .cost img { width: 16px; height: 16px; vertical-align: -3px; image-rendering: pixelated; }
