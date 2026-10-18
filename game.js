@@ -55,6 +55,7 @@
     { id: 'floor',    name: 'Floor',    icon: '🟧', cost: { wood: 1 } },
     { id: 'door',     name: 'Door',     icon: '🚪', cost: { wood: 3 } },
     { id: 'campfire', name: 'Campfire', icon: '🔥', cost: { wood: 3, stone: 2 } },
+    { id: 'boat',     name: 'Boat',     icon: '🛶', cost: { wood: 5 } },
   ];
   const BUILD_BY_ID = Object.fromEntries(BUILDS.map(b => [b.id, b]));
   const STRUCTURES = new Set(['wall', 'door', 'campfire']);
@@ -246,6 +247,7 @@
       lastDay: 1,
       fishMode: false, fishing: null,
       fishes: [], particles: [], ripples: [],
+      boats: [], riding: null,
     };
     spawnFishNear(FISH_TARGET);
     msgThrottle.clear();
@@ -438,6 +440,16 @@
     if (s.build) { p.cooldown = placeStructure(tx, ty) ? 0.12 : 0.25; return; }
     if (!inReach(tx, ty)) { msgOnce('reach', 'Too far away. Move closer.', 2); p.cooldown = 0.2; return; }
 
+    // In a boat: click nearby land to step out, click water to drink.
+    if (s.riding) {
+      p.cooldown = 0.3;
+      if (s.ground[i] === WATER) drink(tx * TILE + 16, ty * TILE + 4);
+      else if (!isSolid(tx, ty)) leaveBoat(tx, ty);
+      return;
+    }
+    const clicked = boatAtPx(mouse.x + camX, mouse.y + camY);
+    if (clicked) { boardBoat(clicked); p.cooldown = 0.3; return; }
+
     p.cooldown = 0.3;
     p.swing = 0.25;
     const o = s.obj[i];
@@ -526,6 +538,7 @@
   function canPlace(id, tx, ty) {
     const s = state;
     const i = ty * W + tx;
+    if (id === 'boat') return inBounds(tx, ty) && boatFits(tx * TILE + 16, ty * TILE + 16) && !boatAtPx(tx * TILE + 16, ty * TILE + 16, 30);
     if (!inBounds(tx, ty) || s.ground[i] === WATER) return false;
     const o = s.obj[i];
     if (id === 'floor') return !s.floor[i] && (!o || STRUCTURES.has(o.type));
@@ -540,6 +553,7 @@
     pay(b.cost);
     const i = ty * W + tx;
     if (b.id === 'floor') state.floor[i] = 1;
+    else if (b.id === 'boat') state.boats.push(makeBoat(tx * TILE + 16, ty * TILE + 16, state.player.face));
     else state.obj[i] = makeObj(b.id, Math.random);
     renderBuildBar();
     return true;
@@ -550,7 +564,12 @@
     const i = ty * W + tx;
     const o = state.obj[i];
     const cx = tx * TILE + 16, cy = ty * TILE + 4;
-    if (o && STRUCTURES.has(o.type)) {
+    const boat = boatAtPx(tx * TILE + 16, ty * TILE + 16, 22);
+    if (boat && boat !== state.riding) {
+      state.boats = state.boats.filter(b => b !== boat);
+      refund(BUILD_BY_ID.boat.cost);
+      floatText(cx, cy, `+${costText(BUILD_BY_ID.boat.cost)}`, '#fff');
+    } else if (o && STRUCTURES.has(o.type)) {
       state.obj[i] = null;
       refund(BUILD_BY_ID[o.type].cost);
       floatText(cx, cy, `+${costText(BUILD_BY_ID[o.type].cost)}`, '#fff');
@@ -914,7 +933,9 @@
         speed = 95;
         if (fish.timer <= 0) fish.state = 'wander';
       } else if (fish.state === 'wander') {
-        if (bob && !bob.fish && Math.hypot(bob.bx - fish.x, bob.by - fish.y) < 160 && Math.random() < 0.35 * dt) fish.state = 'interested';
+        const fast = s.boats.find(b => b.speed > 40 && Math.hypot(b.x - fish.x, b.y - fish.y) < 60);
+        if (fast) fleeFish(fish, fast.x, fast.y);
+        else if (bob && !bob.fish && Math.hypot(bob.bx - fish.x, bob.by - fish.y) < 160 && Math.random() < 0.35 * dt) fish.state = 'interested';
       }
       if (fish.state === 'interested' || fish.state === 'nibble' || fish.state === 'biting') {
         if (!bob || (bob.fish && bob.fish !== fish)) {
@@ -961,6 +982,155 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Boats
+  // ---------------------------------------------------------------------------
+  // A boat glides forward easily but resists sliding sideways (like a keel),
+  // keeps its momentum on the water, and bounces off the shore.
+  const BOAT_RADIUS = 11;
+  const BOAT_THRUST = 260;      // px/s² while rowing
+  const BOAT_MAX_SPEED = 170;
+
+  function makeBoat(x, y, angle) {
+    return { x, y, angle, vx: 0, vy: 0, av: 0, row: 0, wakeT: 0, seed: Math.random() * 10 };
+  }
+
+  function boatFits(x, y) {
+    for (const [dx, dy] of [[0, 0], [BOAT_RADIUS, 0], [-BOAT_RADIUS, 0], [0, BOAT_RADIUS], [0, -BOAT_RADIUS]])
+      if (!isWaterPx(x + dx, y + dy)) return false;
+    return true;
+  }
+
+  function boatAtPx(x, y, r = 16) {
+    let best = null, bestD = r;
+    for (const b of state.boats) {
+      const d = Math.hypot(b.x - x, b.y - y);
+      if (d < bestD) { best = b; bestD = d; }
+    }
+    return best;
+  }
+
+  function boardBoat(b) {
+    const s = state;
+    s.riding = b;
+    if (s.build) { s.build = null; renderBuildBar(); }
+    s.player.x = b.x;
+    s.player.y = b.y;
+    msgOnce('boathelp', 'You get in the boat. W/S to row, A/D to steer, Space (or click the shore) to get out.', 20);
+  }
+
+  // Step onto a land tile next to the boat. With no tile given, pick the closest one.
+  function leaveBoat(tx, ty) {
+    const s = state, p = s.player, b = s.riding;
+    const ok = (x, y) => inBounds(x, y) && s.ground[y * W + x] !== WATER && !isSolid(x, y) &&
+      Math.hypot(x * TILE + 16 - b.x, y * TILE + 16 - b.y) <= TILE * 1.9;
+    let spot = tx !== undefined && ok(tx, ty) ? [tx, ty] : null;
+    if (!spot) {
+      const bx = Math.floor(b.x / TILE), by = Math.floor(b.y / TILE);
+      let bestD = Infinity;
+      for (let y = by - 2; y <= by + 2; y++)
+        for (let x = bx - 2; x <= bx + 2; x++) {
+          const d = Math.hypot(x * TILE + 16 - b.x, y * TILE + 16 - b.y);
+          if (ok(x, y) && d < bestD) { bestD = d; spot = [x, y]; }
+        }
+    }
+    if (!spot) { msgOnce('noshore', 'Row closer to the shore to get out.', 2); return; }
+    s.riding = null;
+    b.vx *= 0.3; b.vy *= 0.3;
+    p.x = spot[0] * TILE + 16;
+    p.y = spot[1] * TILE + 16;
+  }
+
+  function updateBoats(dt) {
+    const s = state;
+    for (const b of s.boats) {
+      const rowing = b === s.riding && !s.sleeping;
+      let thrust = 0, turn = 0;
+      if (rowing) {
+        if (keys.has('KeyW') || keys.has('ArrowUp')) thrust = 1;
+        if (keys.has('KeyS') || keys.has('ArrowDown')) thrust = -0.5;
+        if (keys.has('KeyA') || keys.has('ArrowLeft')) turn = -1;
+        if (keys.has('KeyD') || keys.has('ArrowRight')) turn = 1;
+      }
+      b.av += (turn * 2.4 - b.av) * Math.min(1, dt * 4);
+      b.angle += b.av * dt;
+      const fx = Math.cos(b.angle), fy = Math.sin(b.angle);
+      b.vx += fx * thrust * BOAT_THRUST * dt;
+      b.vy += fy * thrust * BOAT_THRUST * dt;
+
+      // Split velocity into forward and sideways parts; sideways dies off much faster.
+      const fwd = (b.vx * fx + b.vy * fy) * Math.exp(-1.1 * dt);
+      const side = (-b.vx * fy + b.vy * fx) * Math.exp(-6 * dt);
+      b.vx = fx * fwd - fy * side;
+      b.vy = fy * fwd + fx * side;
+      const speed = Math.hypot(b.vx, b.vy);
+      if (speed > BOAT_MAX_SPEED) { b.vx *= BOAT_MAX_SPEED / speed; b.vy *= BOAT_MAX_SPEED / speed; }
+
+      // Move, bouncing off land.
+      const nx = b.x + b.vx * dt, ny = b.y + b.vy * dt;
+      if (boatFits(nx, b.y)) b.x = nx; else b.vx *= -0.35;
+      if (boatFits(b.x, ny)) b.y = ny; else b.vy *= -0.35;
+
+      b.row = thrust || turn ? b.row + dt * 7 : b.row;
+      b.wakeT -= dt;
+      if (speed > 35 && b.wakeT <= 0) {
+        ripple(b.x - fx * 15, b.y - fy * 15);
+        b.wakeT = 0.18;
+      }
+      b.speed = speed;
+    }
+    if (s.riding) {
+      s.player.x = s.riding.x;
+      s.player.y = s.riding.y;
+    }
+  }
+
+  function boatPath() {
+    ctx.beginPath();
+    ctx.moveTo(19, 0);
+    ctx.quadraticCurveTo(12, -10, -12, -9);
+    ctx.lineTo(-16, -7);
+    ctx.lineTo(-16, 7);
+    ctx.lineTo(-12, 9);
+    ctx.quadraticCurveTo(12, 10, 19, 0);
+    ctx.closePath();
+  }
+
+  function drawBoat(b, t) {
+    const riding = b === state.riding;
+    ctx.save();
+    ctx.translate(b.x, b.y + Math.sin(t * 2 + b.seed) * 0.8);
+    ctx.rotate(b.angle);
+    ctx.fillStyle = 'rgba(0,0,0,0.18)';
+    ctx.beginPath();
+    ctx.ellipse(1, 3, 19, 10, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#6e4521';
+    boatPath();
+    ctx.fill();
+    ctx.save();
+    ctx.scale(0.8, 0.7);
+    ctx.fillStyle = '#a8743d';
+    boatPath();
+    ctx.fill();
+    ctx.restore();
+    ctx.fillStyle = '#6e4521';
+    ctx.fillRect(-4, -7, 5, 14);   // seat
+    if (riding) {
+      // Oars sweep back and forth while rowing.
+      const a = Math.sin(b.row) * 0.6;
+      ctx.strokeStyle = '#5b3a1c';
+      ctx.lineWidth = 2;
+      for (const side of [-1, 1]) {
+        ctx.beginPath();
+        ctx.moveTo(-1, side * 7);
+        ctx.lineTo(-1 - Math.sin(a) * 14, side * (7 + Math.cos(a) * 12));
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  // ---------------------------------------------------------------------------
   // Update
   // ---------------------------------------------------------------------------
   function update(dt) {
@@ -969,7 +1139,9 @@
     s.time += dt * timeMul;
 
     // Movement
-    if (!s.sleeping) {
+    if (s.riding) {
+      p.face = Math.atan2(mouse.y + camY - p.y, mouse.x + camX - p.x);
+    } else if (!s.sleeping) {
       let mx = 0, my = 0;
       if (keys.has('KeyA') || keys.has('ArrowLeft')) mx--;
       if (keys.has('KeyD') || keys.has('ArrowRight')) mx++;
@@ -1033,6 +1205,7 @@
     // Actions
     p.cooldown -= dt;
     p.swing = Math.max(0, p.swing - dt);
+    updateBoats(dt);
     if (s.fishMode) updateFishing(dt);
     else if (mouse.down && p.cooldown <= 0 && !s.sleeping) act();
     mouse.pressed = false;
@@ -1131,6 +1304,7 @@
         if (s.floor[ty * W + tx]) drawFloor(tx * TILE, ty * TILE);
       }
     drawFishes(t);
+    for (const b of s.boats) drawBoat(b, t);
 
     // Hover highlight
     const hv = hoverTile();
@@ -1161,6 +1335,7 @@
       ctx.globalAlpha = 0.55;
       const gx = hv.tx * TILE, gy = hv.ty * TILE;
       if (s.build === 'floor') drawFloor(gx, gy);
+      else if (s.build === 'boat') drawBoat(makeBoat(gx + 16, gy + 16, p.face), t);
       else drawObj(makeObj(s.build, () => 0.5), gx, gy, t);
       ctx.globalAlpha = 1;
       ctx.strokeStyle = ok ? '#7ddc6a' : '#ff5a5a';
@@ -1380,9 +1555,9 @@
   }
 
   function drawPlayer(p, t) {
-    const bob = keys.size && !state.sleeping ? Math.sin((p.walk || 0) * 14) * 1.2 : 0;
+    const bob = keys.size && !state.sleeping && !state.riding ? Math.sin((p.walk || 0) * 14) * 1.2 : 0;
     const x = p.x, y = p.y + bob;
-    shadow(p.x, p.y + 11, 11, 4);
+    if (!state.riding) shadow(p.x, p.y + 11, 11, 4);
 
     // Tool swing
     if (p.swing > 0 || state.build) {
@@ -1647,6 +1822,7 @@
     const modes = [];
     if (s.build) modes.push('🔨 Build mode');
     if (s.fishMode) modes.push('🎣 Fishing');
+    if (s.riding) modes.push('🛶 Boating');
     if (modes.length) status += (status ? ' · ' : '') + modes.join(' · ');
     const st = $('status');
     if (st.innerHTML !== status) st.innerHTML = status;
@@ -1729,7 +1905,7 @@
     if (state.build) {
       if (state.fishMode) toggleFishing();
       show('craft', false);
-      msgOnce('buildhelp', 'Build mode: press 1–4 to choose, click to place, right-click to remove. B or Esc to exit.', 30);
+      msgOnce('buildhelp', 'Build mode: press 1–5 to choose, click to place, right-click to remove. B or Esc to exit.', 30);
     }
     renderBuildBar();
   }
@@ -1784,7 +1960,8 @@
         if (state.build) { state.build = null; renderBuildBar(); }
         if (state.fishMode) toggleFishing();
         break;
-      case 'Digit1': case 'Digit2': case 'Digit3': case 'Digit4':
+      case 'Space': if (state.riding) leaveBoat(); break;
+      case 'Digit1': case 'Digit2': case 'Digit3': case 'Digit4': case 'Digit5':
         if (state.build) { state.build = BUILDS[+e.code.slice(5) - 1].id; renderBuildBar(); }
         break;
     }
@@ -1850,6 +2027,6 @@
 
   // Test hook: open index.html?debug to poke at the game from the console.
   if (location.search.includes('debug')) {
-    window.__game = { get state() { return state; }, get cam() { return [camX, camY]; }, mouse, keys, give, toggleFishing, isWaterPx };
+    window.__game = { get state() { return state; }, get cam() { return [camX, camY]; }, mouse, keys, give, toggleFishing, isWaterPx, makeBoat, boardBoat, leaveBoat };
   }
 })();
